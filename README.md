@@ -3,6 +3,7 @@
 - GPU: RTX 4060 Laptop
 - CUDA Toolkit Version: 12.6
 - Driver Version: 595.71
+- PyTorch Version: 2.11.0+cu126
 - M = N = K = 4096
 - Metric: median latency from `triton.testing.do_bench`
 
