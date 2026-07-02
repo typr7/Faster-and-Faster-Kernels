@@ -59,6 +59,35 @@ void mma_m16n8k16(uint32_t A[4], uint32_t B[2], float D[4])
     );
 }
 
+__device__ __forceinline__
+void cp_async_cg_16(const void* gmem, void* smem)
+{
+    uint32_t smem_addr = cvta_shared(smem);
+    asm volatile(
+        "cp.async.cg.shared.global [%0], [%1], 16;"
+        :: "r"(smem_addr), "l"(gmem)
+    );
+}
+
+__device__ __forceinline__
+void cp_async_commit()
+{
+    asm volatile("cp.async.commit_group;");
+}
+
+template <int N>
+__device__ __forceinline__
+void cp_async_wait_group()
+{
+    asm volatile("cp.async.wait_group %0;" :: "n"(N));
+}
+
+__device__ __forceinline__
+void cp_async_wait_all()
+{
+    asm volatile("cp.async.wait_all;" ::: "memory");
+}
+
 using KernelFn = void(
     const nv_bfloat16*,
     const nv_bfloat16*,
