@@ -15,10 +15,16 @@ void load_tile_to_smem(
     nv_bfloat16* __restrict__ smem,
     uint32_t src_stride
 ) {
-    for (uint32_t i = threadIdx.x; i < TILE_M * TILE_N; i += TB_SIZE) {
-        const uint32_t y = i / TILE_N;
-        const uint32_t x = i % TILE_N;
-        smem[y * TILE_N + x] = src[y * src_stride + x];
+    constexpr uint32_t TILE_N_U4 = TILE_N / BF16_NUM_PER_U4;
+    const uint32_t src_stride_u4 = src_stride / BF16_NUM_PER_U4;
+
+    const auto* __restrict__ src_u4 = reinterpret_cast<const uint4*>(&src[0]);
+    auto* __restrict__ smem_u4 = reinterpret_cast<uint4*>(&smem[0]);
+
+    for (uint32_t i = threadIdx.x; i < TILE_M * TILE_N_U4; i += TB_SIZE) {
+        const uint32_t y = i / TILE_N_U4;
+        const uint32_t x = i % TILE_N_U4;
+        smem_u4[y * TILE_N_U4 + x] = src_u4[y * src_stride_u4 + x];
     }
 }
 
@@ -77,6 +83,7 @@ void matmul_kernel(
             uint32_t B_reg[MMA_TILES_N][B_REGS_PER_THREAD];
 
             // (16x8)
+            #pragma unroll
             for (uint32_t n = 0; n < MMA_TILES_N; n++) {
                 const uint32_t ldmatrix_lane = lane_id % 16;
                 const uint32_t smem_n = warp_tile_offset_n + n * MMA_N + ldmatrix_lane % 8;
@@ -85,6 +92,7 @@ void matmul_kernel(
             }
 
             // (16x16)
+            #pragma unroll
             for (uint32_t m = 0; m < MMA_TILES_M; m++) {
                 uint32_t A_reg[A_REGS_PER_THREAD];
 
@@ -94,6 +102,7 @@ void matmul_kernel(
                 const uint32_t smem_k = k + (lane_id / 16) * 8;
                 ldmatrix_x4(A_reg, cvta_shared(&A_smem[smem_m][smem_k]));
 
+                #pragma unroll
                 for (uint32_t n = 0; n < MMA_TILES_N; n++) {
                     mma_m16n8k16(A_reg, B_reg[n], acc_reg[m][n]);
                 }
@@ -105,16 +114,18 @@ void matmul_kernel(
         B += CTA_TILE_K;
     }
 
+    #pragma unroll
     for (uint32_t m = 0; m < MMA_TILES_M; m++) {
+        #pragma unroll
         for (uint32_t n = 0; n < MMA_TILES_N; n++) {
             const uint32_t y = m * MMA_M + lane_id / 4;
             const uint32_t x = n * MMA_N + (lane_id % 4) * 2;
 
-            float* reg = acc_reg[m][n];
-            C[y * N + x] = __float2bfloat16(reg[0]);
-            C[y * N + x + 1] = __float2bfloat16(reg[1]);
-            C[(y + 8) * N + x] = __float2bfloat16(reg[2]);
-            C[(y + 8) * N + x + 1] = __float2bfloat16(reg[3]);
+            const float* reg = acc_reg[m][n];
+            reinterpret_cast<nv_bfloat162*>(&C[y * N + x])[0] =
+                __float22bfloat162_rn(make_float2(reg[0], reg[1]));
+            reinterpret_cast<nv_bfloat162*>(&C[(y + 8) * N + x])[0] =
+                __float22bfloat162_rn(make_float2(reg[2], reg[3]));
         }
     }
 }
@@ -122,7 +133,7 @@ void matmul_kernel(
 }
 
 // no bound check
-void matmul_v1(
+void matmul_v2(
     const nv_bfloat16* A,
     const nv_bfloat16* B,
     nv_bfloat16* C,

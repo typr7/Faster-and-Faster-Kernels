@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cassert>
 
 #include <cuda_bf16.h>
 
@@ -8,6 +9,13 @@
 namespace
 {
 
+template <uint32_t TILE_N_U4>
+__device__ __forceinline__
+uint32_t swizzle_u4(uint32_t y, uint32_t x_u4)
+{
+    return x_u4 ^ (y & (TILE_N_U4 - 1));
+}
+
 template <uint32_t TB_SIZE, uint32_t TILE_M, uint32_t TILE_N>
 __device__ __forceinline__
 void load_tile_to_smem(
@@ -15,10 +23,17 @@ void load_tile_to_smem(
     nv_bfloat16* __restrict__ smem,
     uint32_t src_stride
 ) {
-    for (uint32_t i = threadIdx.x; i < TILE_M * TILE_N; i += TB_SIZE) {
-        const uint32_t y = i / TILE_N;
-        const uint32_t x = i % TILE_N;
-        smem[y * TILE_N + x] = src[y * src_stride + x];
+    constexpr uint32_t TILE_N_U4 = TILE_N / BF16_NUM_PER_U4;
+    const uint32_t src_stride_u4 = src_stride / BF16_NUM_PER_U4;
+
+    const auto* __restrict__ src_u4 = reinterpret_cast<const uint4*>(src);
+    auto* __restrict__ smem_u4 = reinterpret_cast<uint4*>(smem);
+
+    for (uint32_t i = threadIdx.x; i < TILE_M * TILE_N_U4; i += TB_SIZE) {
+        const uint32_t y = i / TILE_N_U4;
+        const uint32_t x_u4 = i % TILE_N_U4;
+        const uint32_t x_u4_swizzled = swizzle_u4<TILE_N_U4>(y, x_u4);
+        smem_u4[y * TILE_N_U4 + x_u4_swizzled] = src_u4[y * src_stride_u4 + x_u4];
     }
 }
 
@@ -81,18 +96,23 @@ void matmul_kernel(
                 const uint32_t ldmatrix_lane = lane_id % 16;
                 const uint32_t smem_n = warp_tile_offset_n + n * MMA_N + ldmatrix_lane % 8;
                 const uint32_t smem_k = k + (ldmatrix_lane / 8) * 8;
-                ldmatrix_x2(B_reg[n], cvta_shared(&B_smem[smem_n][smem_k]));
+                const uint32_t smem_k_swizzled = swizzle_u4<CTA_TILE_K / BF16_NUM_PER_U4>(
+                    smem_n, smem_k / BF16_NUM_PER_U4
+                ) * BF16_NUM_PER_U4;
+                ldmatrix_x2(B_reg[n], cvta_shared(&B_smem[smem_n][smem_k_swizzled]));
             }
 
             // (16x16)
             for (uint32_t m = 0; m < MMA_TILES_M; m++) {
                 uint32_t A_reg[A_REGS_PER_THREAD];
 
-                const uint32_t row = lane_id % 8;
                 const uint32_t matrix_id = lane_id / 8;
-                const uint32_t smem_m = warp_tile_offset_m + m * MMA_M + (matrix_id & 0b1) * 8 + row;
+                const uint32_t smem_m = warp_tile_offset_m + m * MMA_M + (matrix_id & 0b1) * 8 + lane_id % 8;
                 const uint32_t smem_k = k + (lane_id / 16) * 8;
-                ldmatrix_x4(A_reg, cvta_shared(&A_smem[smem_m][smem_k]));
+                const uint32_t smem_k_swizzled = swizzle_u4<CTA_TILE_K / BF16_NUM_PER_U4>(
+                    smem_m, smem_k / BF16_NUM_PER_U4
+                ) * BF16_NUM_PER_U4;
+                ldmatrix_x4(A_reg, cvta_shared(&A_smem[smem_m][smem_k_swizzled]));
 
                 for (uint32_t n = 0; n < MMA_TILES_N; n++) {
                     mma_m16n8k16(A_reg, B_reg[n], acc_reg[m][n]);
@@ -110,11 +130,13 @@ void matmul_kernel(
             const uint32_t y = m * MMA_M + lane_id / 4;
             const uint32_t x = n * MMA_N + (lane_id % 4) * 2;
 
-            float* reg = acc_reg[m][n];
-            C[y * N + x] = __float2bfloat16(reg[0]);
-            C[y * N + x + 1] = __float2bfloat16(reg[1]);
-            C[(y + 8) * N + x] = __float2bfloat16(reg[2]);
-            C[(y + 8) * N + x + 1] = __float2bfloat16(reg[3]);
+            const float* reg = acc_reg[m][n];
+            // Codegen-sensitive: replacing the &C[...] stores below with
+            // flat pointer arithmetic drops ptxas regs from 187 to 166
+            reinterpret_cast<nv_bfloat162*>(&C[y * N + x])[0] =
+                __float22bfloat162_rn(make_float2(reg[0], reg[1]));
+            reinterpret_cast<nv_bfloat162*>(&C[(y + 8) * N + x])[0] =
+                __float22bfloat162_rn(make_float2(reg[2], reg[3]));
         }
     }
 }
@@ -122,7 +144,7 @@ void matmul_kernel(
 }
 
 // no bound check
-void matmul_v1(
+void matmul_v3(
     const nv_bfloat16* A,
     const nv_bfloat16* B,
     nv_bfloat16* C,
@@ -139,6 +161,9 @@ void matmul_v1(
     constexpr uint32_t WARP_TILES_N = CTA_TILE_N / WARP_TILE_N;
 
     constexpr uint32_t TB_SIZE = WARP_TILES_M * WARP_TILES_N * WARP_SIZE;
+
+    static_assert((CTA_TILE_M % WARP_TILE_M == 0) && (CTA_TILE_N % WARP_TILE_N == 0));
+    assert((N % CTA_TILE_N == 0) && (M % CTA_TILE_M == 0) && (K % CTA_TILE_K == 0));
 
     const dim3 grid_size(N / CTA_TILE_N, M / CTA_TILE_M);
 

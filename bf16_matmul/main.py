@@ -7,7 +7,7 @@ def benchmark(f, *args, **kwargs):
 
 module = torch.utils.cpp_extension.load(
     'module',
-    sources=['matmul_v1.cpp', 'matmul_v1.cu'],
+    sources=['matmul.cpp', 'matmul_v1.cu', 'matmul_v2.cu', 'matmul_v3.cu', 'matmul_v4.cu'],
     extra_cuda_cflags=[
         '-O3',
         '-lineinfo',
@@ -22,8 +22,17 @@ input2_trans = input2.transpose(0, 1).contiguous()
 
 output_ref = torch.matmul(input1, input2_trans)
 output_v1  = module.matmul_v1(input1, input2)
+output_v2  = module.matmul_v2(input1, input2)
+output_v3  = module.matmul_v3(input1, input2)
+output_v4  = module.matmul_v4(input1, input2)
 
 torch.testing.assert_close(output_v1, output_ref)
+torch.testing.assert_close(output_v2, output_ref)
+torch.testing.assert_close(output_v3, output_ref)
+torch.testing.assert_close(output_v4, output_ref)
 
 print(f'torch.matmul: {benchmark(torch.matmul, input1, input2_trans)}')
 print(f'v1: {benchmark(module.matmul_v1, input1, input2)}')
+print(f'v2: {benchmark(module.matmul_v2, input1, input2)}')
+print(f'v3: {benchmark(module.matmul_v3, input1, input2)}')
+print(f'v4: {benchmark(module.matmul_v4, input1, input2)}')
