@@ -24,7 +24,7 @@ void matmul_v1_kernel(
     const int offset_n = blockIdx.x * blockDim.x + threadIdx.x;
     const int offset_m = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (offset_m > M || offset_n > N) {
+    if (offset_m >= M || offset_n >= N) {
         return;
     }
 
