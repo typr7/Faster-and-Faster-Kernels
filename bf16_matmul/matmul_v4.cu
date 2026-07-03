@@ -183,3 +183,29 @@ void matmul_v4(
         WARP_TILE_M, WARP_TILE_N
     ><<<grid_size, TB_SIZE>>>(A, B, C, M, N, K);
 }
+
+void matmul_v4_tuned(
+    const nv_bfloat16* A,
+    const nv_bfloat16* B,
+    nv_bfloat16* C,
+    int M, int N, int K
+) {
+    constexpr uint32_t CTA_TILE_M = 64;
+    constexpr uint32_t CTA_TILE_N = 128;
+    constexpr uint32_t CTA_TILE_K = 64;
+
+    constexpr uint32_t WARP_TILE_M = 64;
+    constexpr uint32_t WARP_TILE_N = 32;
+
+    constexpr uint32_t TB_SIZE = (CTA_TILE_M / WARP_TILE_M) * (CTA_TILE_N / WARP_TILE_N) * WARP_SIZE;
+
+    static_assert((CTA_TILE_M % WARP_TILE_M == 0) && (CTA_TILE_N % WARP_TILE_N == 0));
+    assert((N % CTA_TILE_N == 0) && (M % CTA_TILE_M == 0) && (K % CTA_TILE_K == 0));
+    
+    const dim3 grid_size(N / CTA_TILE_N, M / CTA_TILE_M);
+    matmul_kernel<
+        TB_SIZE,
+        CTA_TILE_M, CTA_TILE_N, CTA_TILE_K,
+        WARP_TILE_M, WARP_TILE_N
+    ><<<grid_size, TB_SIZE>>>(A, B, C, M, N, K);
+}

@@ -1,31 +1,34 @@
 # Faster and Faster Kernels
 ## Benchmark Info
-- GPU: NVIDIA GeForce RTX 4060 Laptop GPU
-- NVIDIA Driver Version: 595.71
+- GPU: NVIDIA GeForce RTX 5090
+- NVIDIA Driver Version: 595.58.03
 - CUDA Toolkit: 13.0
-- PyTorch Version: 2.11.0+cu130
+- PyTorch Version: 2.12.1+cu130
 - M = N = K = 4096
 - TFLOPS metric: `2 * M * N * K / duration`
 - `%SOL` metric: `TFLOPS / theoretical_peak_TFLOPS * 100`
-- Peak basis: 24 SMs, CUDA runtime device clock 2010 MHz; FP32 peak 12.35 TFLOPS, BF16 Tensor Core dense peak 49.40 TFLOPS
+- Peak basis: 170 SMs, CUDA runtime device clock 2407 MHz; FP32 peak 104.75 TFLOPS, BF16 Tensor Core dense peak 419.01 TFLOPS
 
 ## FP32 Matmul
 
 Kernel name                                             | Duration (ms) | % of torch.matmul | TFLOPS (%SOL)
 --------------------------------------------------------|---------------|-------------------|---------------
-`torch.matmul` (PyTorch baseline)                       |         16.27 |           100.00% |   8.45 (68.38%)
-v1 (naive one-thread-per-output)                        |        162.15 |            10.04% |    0.85 (6.86%)
-v2 (shared-memory CTA tiling)                           |        137.55 |            11.83% |    1.00 (8.09%)
-v3 (thread coarsening)                                  |        108.00 |            15.07% |   1.27 (10.30%)
-v4 (thread tiling with register blocking)               |         26.24 |            62.03% |   5.24 (42.42%)
-v5 (warp tiling, transposed/skewed SMEM, vectorized B)  |         21.83 |            74.54% |   6.29 (50.97%)
+`torch.matmul` (PyTorch baseline)                       |          2.05 |           100.00% |  67.08 (64.03%)
+v1 (naive one-thread-per-output)                        |         18.28 |            11.21% |    7.52 (7.18%)
+v2 (shared-memory CTA tiling)                           |         14.66 |            13.98% |    9.38 (8.95%)
+v3 (thread coarsening)                                  |          6.52 |            31.45% |  21.09 (20.14%)
+v4 (thread tiling with register blocking)               |          3.55 |            57.71% |  38.71 (36.95%)
+v5 (warp tiling, transposed/skewed SMEM, vectorized B)  |          3.52 |            58.24% |  39.06 (37.29%)
 
 ## BF16 Matmul
 
 Kernel name                                             | Duration (ms) | % of torch.matmul | TFLOPS (%SOL)
 --------------------------------------------------------|---------------|-------------------|---------------
-`torch.matmul` (PyTorch baseline)                       |          6.12 |           100.00% |  22.47 (45.50%)
-v1 (tensor core MMA, hierarchical tiling)               |         13.14 |            46.54% |  10.46 (21.17%)
-v2 (vectorized memory copy)                             |          7.30 |            83.81% |  18.83 (38.13%)
-v3 (swizzled shared memory)                             |          6.30 |            97.03% |  21.81 (44.14%)
-v4 (flat shared-memory addressing)                      |          5.30 |           115.31% |  25.92 (52.46%)
+`torch.matmul` (PyTorch baseline)                       |          0.63 |           100.00% | 219.67 (52.43%)
+v1 (tensor core MMA, hierarchical tiling)               |          1.89 |            33.12% |  72.75 (17.36%)
+v2 (vectorized memory copy)                             |          0.96 |            65.49% | 143.86 (34.33%)
+v3 (swizzled shared memory)                             |          0.78 |            80.45% | 176.72 (42.18%)
+v4 (flat shared-memory addressing)                      |          0.78 |            80.24% | 176.26 (42.07%)
+v4 tuned (CTA 64x128x64, warp 64x32)                    |          0.72 |            86.54% | 190.10 (45.37%)
+v5 (double-buffered async copy pipeline)                |          0.78 |            79.81% | 175.32 (41.84%)
+v5 tuned (CTA 64x128x64, warp 32x64)                    |          0.68 |            92.51% | 203.22 (48.50%)
