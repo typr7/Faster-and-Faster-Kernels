@@ -70,6 +70,15 @@ void cp_async_cg_16(const void* gmem, void* smem)
 }
 
 __device__ __forceinline__
+void cp_async_cg_16(const void* gmem, uint32_t smem_addr)
+{
+    asm volatile(
+        "cp.async.cg.shared.global [%0], [%1], 16;"
+        :: "r"(smem_addr), "l"(gmem)
+    );
+}
+
+__device__ __forceinline__
 void cp_async_commit()
 {
     asm volatile("cp.async.commit_group;");

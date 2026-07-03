@@ -84,18 +84,23 @@ void matmul_kernel(
     C += offset_m * N + offset_n;
 
     extern __shared__ nv_bfloat16 smem[];
-    nv_bfloat16* A_smem[2];
-    nv_bfloat16* B_smem[2];
 
-    A_smem[0] = smem;
-    B_smem[0] = A_smem[0] + CTA_TILE_M * CTA_TILE_K;
-    A_smem[1] = B_smem[0] + CTA_TILE_N * CTA_TILE_K;
-    B_smem[1] = A_smem[1] + CTA_TILE_M * CTA_TILE_K;
+    // buffer_0        buffer_1
+    // [A_smem][B_smem][A_smem][B_smem]
+    constexpr uint32_t A_STAGE = CTA_TILE_M * CTA_TILE_K;
+    constexpr uint32_t B_STAGE = CTA_TILE_N * CTA_TILE_K;
+    constexpr uint32_t STAGE_SIZE = A_STAGE + B_STAGE;
+
+    const uint32_t A_smem_offset_m = warp_tile_offset_m + ((lane_id / 8) & 0b1) * 8 + lane_id % 8;
+    const uint32_t A_smem_offset_k = lane_id / 16 * 8;
+
+    const uint32_t B_smem_offset_n = warp_tile_offset_n + (lane_id / 16) * 8 + lane_id % 8;
+    const uint32_t B_smem_offset_k = ((lane_id / 8) & 0b1) * 8;
 
     float acc_reg[MMA_TILES_M][MMA_TILES_N][ACC_REGS_PER_THREAD] = {0.f};
 
-    load_tile_to_smem_async<TB_SIZE, CTA_TILE_M, CTA_TILE_K>(A, A_smem[0], K);
-    load_tile_to_smem_async<TB_SIZE, CTA_TILE_N, CTA_TILE_K>(B, B_smem[0], K);
+    load_tile_to_smem_async<TB_SIZE, CTA_TILE_M, CTA_TILE_K>(A, smem, K);
+    load_tile_to_smem_async<TB_SIZE, CTA_TILE_N, CTA_TILE_K>(B, smem + A_STAGE, K);
     cp_async_wait_all();
     __syncthreads();
 
@@ -103,17 +108,23 @@ void matmul_kernel(
         const uint32_t curr = (cta_tile_offset_k / CTA_TILE_K) & 0b1;
         const uint32_t next = curr ^ 0b1;
 
+        nv_bfloat16* A_smem_curr = smem + curr * STAGE_SIZE;
+        nv_bfloat16* B_smem_curr = A_smem_curr + A_STAGE;
+        nv_bfloat16* A_smem_next = smem + next * STAGE_SIZE;
+        nv_bfloat16* B_smem_next = A_smem_next + A_STAGE;
+
         const uint32_t next_k = cta_tile_offset_k + CTA_TILE_K;
         if (next_k < K) {
-            load_tile_to_smem_async<TB_SIZE, CTA_TILE_M, CTA_TILE_K>(A + next_k, A_smem[next], K);
-            load_tile_to_smem_async<TB_SIZE, CTA_TILE_N, CTA_TILE_K>(B + next_k, B_smem[next], K);
+            load_tile_to_smem_async<TB_SIZE, CTA_TILE_M, CTA_TILE_K>(A + next_k, A_smem_next, K);
+            load_tile_to_smem_async<TB_SIZE, CTA_TILE_N, CTA_TILE_K>(B + next_k, B_smem_next, K);
         }
 
         for (uint32_t k = 0; k < CTA_TILE_K; k += MMA_K) {
             uint32_t B_reg[MMA_TILES_N][B_REGS_PER_THREAD];
 
             // (16x8)
-            for (uint32_t n = 0; n < MMA_TILES_N; n++) {
+            for (uint32_t n = 0; n < MMA_TILES_N; n += 2) {
+                /*
                 const uint32_t ldmatrix_lane = lane_id % 16;
                 const uint32_t smem_n = warp_tile_offset_n + n * MMA_N + ldmatrix_lane % 8;
                 const uint32_t smem_k = k + (ldmatrix_lane / 8) * 8;
@@ -123,12 +134,23 @@ void matmul_kernel(
                 ldmatrix_x2(B_reg[n], cvta_shared(
                     B_smem[curr] + smem_n * CTA_TILE_K + smem_k_swizzled
                 ));
+                */
+                const uint32_t smem_n = B_smem_offset_n + n * MMA_N;
+                const uint32_t smem_k = B_smem_offset_k + k;
+                const uint32_t smem_k_swz = swizzle_u4<CTA_TILE_K / BF16_NUM_PER_U4>(
+                    smem_n, smem_k / BF16_NUM_PER_U4
+                ) * BF16_NUM_PER_U4;
+                
+                ldmatrix_x4(B_reg[n], cvta_shared(
+                    B_smem_curr + smem_n * CTA_TILE_K + smem_k_swz
+                ));
             }
 
             // (16x16)
             for (uint32_t m = 0; m < MMA_TILES_M; m++) {
                 uint32_t A_reg[A_REGS_PER_THREAD];
 
+                /*
                 const uint32_t matrix_id = lane_id / 8;
                 const uint32_t smem_m = warp_tile_offset_m + m * MMA_M + (matrix_id & 0b1) * 8 + lane_id % 8;
                 const uint32_t smem_k = k + (lane_id / 16) * 8;
@@ -137,6 +159,15 @@ void matmul_kernel(
                 ) * BF16_NUM_PER_U4;
                 ldmatrix_x4(A_reg, cvta_shared(
                     A_smem[curr] + smem_m * CTA_TILE_K + smem_k_swizzled
+                ));
+                */
+                const uint32_t smem_m = A_smem_offset_m + m * MMA_M;
+                const uint32_t smem_k = A_smem_offset_k + k;
+                const uint32_t smem_k_swz = swizzle_u4<CTA_TILE_K / BF16_NUM_PER_U4>(
+                    smem_m, smem_k / BF16_NUM_PER_U4
+                ) * BF16_NUM_PER_U4;
+                ldmatrix_x4(A_reg, cvta_shared(
+                    A_smem_curr + smem_m * CTA_TILE_K + smem_k_swz
                 ));
 
                 for (uint32_t n = 0; n < MMA_TILES_N; n++) {
