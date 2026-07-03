@@ -1,9 +1,15 @@
 import torch
 import torch.utils.cpp_extension
 from triton.testing import do_bench
+import statistics
 
 def benchmark(f, *args, **kwargs):
-    return do_bench(lambda: f(*args, **kwargs), return_mode="median")
+    samples = [do_bench(lambda: f(*args, **kwargs), return_mode="median")
+               for _ in range(7)]
+    return statistics.median(samples)
+
+# def benchmark(f, *args, **kwargs):
+    # return do_bench(lambda: f(*args, **kwargs), return_mode="median")
 
 module = torch.utils.cpp_extension.load(
     'module',
@@ -26,22 +32,16 @@ output_v2  = module.matmul_v2(input1, input2)
 output_v3  = module.matmul_v3(input1, input2)
 output_v4  = module.matmul_v4(input1, input2)
 output_v5  = module.matmul_v5(input1, input2)
-output_v4_tuned  = module.matmul_v4_tuned(input1, input2)
-output_v5_tuned  = module.matmul_v5_tuned(input1, input2)
 
 torch.testing.assert_close(output_v1, output_ref)
 torch.testing.assert_close(output_v2, output_ref)
 torch.testing.assert_close(output_v3, output_ref)
 torch.testing.assert_close(output_v4, output_ref)
 torch.testing.assert_close(output_v5, output_ref)
-torch.testing.assert_close(output_v4_tuned, output_ref)
-torch.testing.assert_close(output_v5_tuned, output_ref)
 
 print(f'torch.matmul: {benchmark(torch.matmul, input1, input2_trans)}')
 print(f'v1: {benchmark(module.matmul_v1, input1, input2)}')
 print(f'v2: {benchmark(module.matmul_v2, input1, input2)}')
 print(f'v3: {benchmark(module.matmul_v3, input1, input2)}')
 print(f'v4: {benchmark(module.matmul_v4, input1, input2)}')
-print(f'v4 tuned: {benchmark(module.matmul_v4_tuned, input1, input2)}')
 print(f'v5: {benchmark(module.matmul_v5, input1, input2)}')
-print(f'v5 tuned: {benchmark(module.matmul_v5_tuned, input1, input2)}')
