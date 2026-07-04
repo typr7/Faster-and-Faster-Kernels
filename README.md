@@ -1,6 +1,6 @@
 # Faster and Faster Kernels
 
-Fixed M = N = K = 4096. Compile with CUDA Toolkit 13.0 and report `duration; % of torch.matmul; TFLOPS (%SOL)`.
+Fixed M = N = K = 4096. Compile with CUDA Toolkit 13.0 and report `duration; % of cuBLAS; TFLOPS (%SOL)`.
 
 - TFLOPS metric: `2 * M * N * K / duration`
 - `%SOL` metric: `TFLOPS / theoretical_peak_TFLOPS * 100`
@@ -15,7 +15,7 @@ NVIDIA A100-PCIE-40GB         | 595.71.05 | 2.12.1+cu130   | 108 SMs, CUDA runti
 
 Kernel name                                             | RTX 5090                         | A100-PCIE-40GB
 --------------------------------------------------------|----------------------------------|-------------------------------
-`torch.matmul` (PyTorch baseline)                       | 2.05 ms; 100.00%; 67.08 (64.03%) | 7.72 ms; 100.00%; 17.79 (91.29%)
+cuBLAS 13.1 (via PyTorch 2.12.1)                        | 2.05 ms; 100.00%; 67.08 (64.03%) | 7.72 ms; 100.00%; 17.79 (91.29%)
 v1 (naive one-thread-per-output)                        | 18.28 ms; 11.21%; 7.52 (7.18%)   | 45.79 ms; 16.87%; 3.00 (15.40%)
 v2 (shared-memory CTA tiling)                           | 14.66 ms; 13.98%; 9.38 (8.95%)   | 26.73 ms; 28.89%; 5.14 (26.37%)
 v3 (thread coarsening)                                  | 6.52 ms; 31.45%; 21.09 (20.14%)  | 27.35 ms; 28.24%; 5.02 (25.78%)
@@ -26,7 +26,7 @@ v5 (warp tiling, transposed/skewed SMEM, vectorized B)  | 3.52 ms; 58.24%; 39.06
 
 Kernel name                                             | RTX 5090                          | A100-PCIE-40GB
 --------------------------------------------------------|-----------------------------------|--------------------------------
-`torch.matmul` (PyTorch baseline)                       | 0.63 ms; 100.00%; 219.67 (52.43%) | 0.64 ms; 100.00%; 215.78 (69.19%)
+cuBLAS 13.1 (via PyTorch 2.12.1)                        | 0.63 ms; 100.00%; 219.67 (52.43%) | 0.64 ms; 100.00%; 215.78 (69.19%)
 v1 (tensor core MMA, hierarchical tiling)               | 1.89 ms; 33.12%; 72.75 (17.36%)   | 4.71 ms; 13.52%; 29.17 (9.35%)
 v2 (vectorized memory copy)                             | 0.96 ms; 65.49%; 143.86 (34.33%)  | 2.84 ms; 22.46%; 48.47 (15.54%)
 v3 (swizzled shared memory)                             | 0.78 ms; 80.45%; 176.72 (42.18%)  | 1.77 ms; 35.91%; 77.49 (24.85%)
