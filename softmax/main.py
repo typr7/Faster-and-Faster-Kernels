@@ -16,7 +16,8 @@ module = torch.utils.cpp_extension.load(
         'softmax_v2.cu',
         'softmax_v3a.cu',
         'softmax_v3b.cu',
-        'softmax_v4.cu'
+        'softmax_v4.cu',
+        'softmax_v5.cu'
     ],
     extra_cuda_cflags=[
         '-O3',
@@ -34,12 +35,14 @@ output_v2  = module.softmax_v2(input)
 output_v3a = module.softmax_v3a(input)
 output_v3b = module.softmax_v3b(input)
 output_v4  = module.softmax_v4(input)
+output_v5  = module.softmax_v5(input)
 
 torch.testing.assert_close(output_v1, output_ref)
 torch.testing.assert_close(output_v2, output_ref)
 torch.testing.assert_close(output_v3a, output_ref)
 torch.testing.assert_close(output_v3b, output_ref)
 torch.testing.assert_close(output_v4, output_ref)
+torch.testing.assert_close(output_v5, output_ref)
 
 print(f'torch.softmax: {benchmark(torch.softmax, input, dim=1)}')
 print(f'v1: {benchmark(module.softmax_v1, input)}')
@@ -47,3 +50,4 @@ print(f'v2: {benchmark(module.softmax_v2, input)}')
 print(f'v3a: {benchmark(module.softmax_v3a, input)}')
 print(f'v3b: {benchmark(module.softmax_v3b, input)}')
 print(f'v4: {benchmark(module.softmax_v4, input)}')
+print(f'v5: {benchmark(module.softmax_v5, input)}')
